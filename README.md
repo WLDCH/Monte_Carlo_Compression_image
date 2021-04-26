@@ -1,1 +1,0 @@
-# Monte_Carlo_Compression_image
