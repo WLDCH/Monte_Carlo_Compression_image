@@ -3,6 +3,19 @@ from random import random
 from statsmodels.graphics.tsaplots import plot_acf
 import matplotlib.pyplot as plt
 from scipy.stats import invgamma
+from PIL import Image, ImageOps
+from tqdm import tqdm
+np.seterr(divide='ignore', invalid='ignore')
+
+
+
+    
+def show(img):
+    plt.figure()
+    plt.imshow(img.astype(int), cmap='gray', vmin=0, vmax=255)
+
+
+
 
 
 class GibbsSampler:
@@ -65,47 +78,130 @@ class GibbsSampler:
         plot_acf(self.simulate_all(nb_sample)[composante, start:])
 
 
-class GibbsSampler2(GibbsSampler):
 
-    def __init__(self, n=5, beta=2, K=10, relation=lambda x, y: x == y + 1 or x == y - 1):
-        super().__init__(n=5, beta=2, K=10, relation=lambda x, y: x == y + 1 or x == y - 1)
-        self.mu = np.random.normal(loc=0, scale=1, size=self.K)
-        self.sigma = invgamma.rvs(a=1, scale=1 ,  size=self.K)
-        self.y = np.random.randint(0,255,size=(256,256)).flatten()
+    
+class ImageCompression():
+    
+    def __init__(self, y, K=16,  beta=1):
+       
+        self.y = y
+        self.u, self.v = self.y.shape
+        self.K = K
+        self.x = np.round((self.y/255)*self.K, 0).astype(int)
+        self.beta = beta
+        self.m_k = np.arange(0, 255, 255/self.K)
+        self.s_k = [1] * self.K
+        self.alpha_k = np.array([1] * self.K)
+        self.beta_k = np.array([10] * self.K)
+        self.mu = np.random.normal(self.m_k, self.s_k, self.K)
+        self.sigma = np.random.gamma(self.alpha_k, 1/self.beta_k, self.K)
+        
+    @staticmethod    
+    def find_neighbors(i,j,x,y):
+        if i==0:
+            if j==0:
+                return [(1,0),(0,1)]
+            elif j==y-1:
+                return [(1,y-1),(0,y-2)]
+            else:
+                return [(0,j-1),(0,j+1),(1,j)]
+        elif i==x-1:
+            if j==0:
+                return [(i-1,j),(i,j+1)]
+            elif j==y-1:
+                return [(i-1,j),(i,j-1)]
+            else:
+                return [(i,j-1),(i,j+1),(i-1,j)]
+        else:
+            if j==0:
+                return [(i+1,j),(i,j+1), (i-1,j)]
+            elif j==y-1:
+                return [(i-1,j),(i,j-1), (i+1,j)]
+            else:
+                return [(i,j-1),(i,j+1),(i-1,j), (i+1,j)]
 
+    @staticmethod
+    def f_normal(y, mu, sigma_2):
+        return 1 / sigma_2 ** 0.5 * np.exp(-(y-mu)**2/(2*sigma_2))  
 
-    def simulate(self, nb_sample=500):
-        X = np.zeros((self.n, nb_sample))
-        X[:, 0] = self.X0
+    @staticmethod
+    def choice(distrib):
+        distrib = distrib.cumsum()
+        t = np.random.rand()
+        i = 0
+        while i < len(distrib) and distrib[i] < t:
+            i += 1
+        return i + 1
+    
+    @staticmethod
+    def convert(path, resize=128):
+        img = Image.open(path)
+        img.thumbnail((resize, resize), Image.ANTIALIAS)  
+        gray_image = ImageOps.grayscale(img)
+        return(np.array(gray_image))
+    
+    
+    
+    def compress_mat(self, nb_iter=10): 
 
-        M = np.zeros((self.K, nb_sample), dtype=object)
-        S = np.zeros((self.K, nb_sample), dtype=object)
-
-        for i in range(self.K):
-            M[i, 0] = [self.mu[i], 0, 1]
-            S[i, 0] = [self.sigma[i], 1, 1]
-
-        for i in range(1, nb_sample):
-
-            #Simulation des xi
-            X[:, i] = X[:, i - 1]
-            M[:, i] = M[:, i - 1]
-            S[:, i] = S[:, i - 1]
-            for k in range(self.n):
-                X[k, i] = self.get_conditional(k, X[:, i])
-
-            #Simulation des sigma_i
+    
+        for _ in tqdm(range(nb_iter)):
+            
+            
+            # Partie sur x
+            for i in range(self.u):
+                for j in range(self.v):
+                    self.x[i,j] = -1
+                    l_neighbors = ImageCompression.find_neighbors(i,j,self.u,self.v)
+                    distrib = np.array([0]*self.K)
+                    for neigh in l_neighbors:
+                        distrib[self.x[neigh]-1] += 1
+                    #print(distrib)
+                    distrib = np.exp(self.beta * (distrib-distrib[0])) # On fait -distrib[0] afin de ne pas avoir une exponentielle trop grande
+                    for k in range(self.K):
+                        distrib[k] *= ImageCompression.f_normal(self.y[i,j], self.mu[k], self.sigma[k])
+                    #print(distrib)
+                    #print('__________________________')
+                    distrib = distrib / np.sum(distrib)
+                    try:
+                        self.x[i,j] = ImageCompression.choice(distrib)
+                    except ValueError:
+                        print(i,j,distrib)
+            
+            
+            # Partie sur mu
             for k in range(self.K):
-                ind = list(np.where(X[:,i]==k))
-                S[k,i][1] = S[k,i][1] +len(ind)/2
-                S[k,i][2] = 1/(1/S[k,i][2] + 1/2 * sum( (self.y[j]-M[k,i][0])**2 for j in ind))
-                S[k,i][0] = np.random.gamma(S[k,i][1], S[k,i][2])
+                n_k = 0
+                buf_k = 0
+                for i in range(self.u):
+                    for j in range(self.v):
+                        if self.x[i, j] == k:
+                            n_k += 1
+                            buf_k += self.y[i, j] / self.sigma[k-1]
+                var_mu = (self.sigma[k-1]**0.5 * self.s_k[k-1])**2/(self.sigma[k-1] + self.s_k[k-1]**2 *n_k)
+                f_k = self.m_k[k-1]/self.s_k[k-1]**2 + buf_k
+                self.mu[k-1] = np.random.normal(var_mu * f_k, np.sqrt(var_mu)) 
 
-            #Simulation des mu_i
+            
+            # Partie sur sigma
             for k in range(self.K):
-                ind = list(np.where(X[:,i]==k))
-                acc = S[k,i][0]/M[k,i][2]
-                M[k,i][1] = ((sum(self.y[i] for i in ind) + M[k,i][1]*acc))/(acc+len(ind))
-                M[k,i][2] = S[k,i][0]/(M[k,i][2]+len(ind))
-                M[k,i] = np.random.normal(M[k,i][1], M[k,i][2] )
-        return (X[:,-1],M[:,-1], S[:,-1])
+                n_k = 0
+                buf_k = 0
+                for i in range(self.u):
+                    for j in range(self.v):
+                        if self.x[i, j] == k:
+                            n_k += 1
+                            buf_k += (self.y[i, j] - self.mu[k-1])**2 / 2
+                self.sigma[k-1] = np.random.gamma(n_k/2 + self.alpha_k[k-1], 1/(self.beta_k[k-1] + buf_k)) 
+
+        return(self.x, self.mu, self.sigma)
+        
+    
+    def compress(self, nb_iter=10):
+        mat = np.zeros((self.u,self.v))
+        X, _, _ = self.compress_mat()
+        for i in range(self.u):
+            for j in range(self.v):
+                mat[i,j] = self.mu[X[i,j]-1]
+        return mat
+    
