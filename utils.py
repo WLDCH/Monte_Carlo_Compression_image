@@ -82,7 +82,7 @@ class GibbsSampler:
     
 class ImageCompression():
     
-    def __init__(self, y, K=16,  beta=1):
+    def __init__(self, y=np.random.randint(0,255,size=(256,256)), K=16,  beta=1):
        
         self.y = y
         self.u, self.v = self.y.shape
@@ -142,7 +142,7 @@ class ImageCompression():
     
     
     
-    def compress_mat(self, nb_iter=10): 
+    def gibbs_sampling(self, nb_iter=10): 
 
     
         for _ in tqdm(range(nb_iter)):
@@ -199,7 +199,7 @@ class ImageCompression():
     
     def compress(self, nb_iter=10):
         mat = np.zeros((self.u,self.v))
-        X, _, _ = self.compress_mat()
+        X, _, _ = self.gibbs_sampling()
         for i in range(self.u):
             for j in range(self.v):
                 mat[i,j] = self.mu[X[i,j]-1]
