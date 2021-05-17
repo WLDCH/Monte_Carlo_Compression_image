@@ -1,207 +1,268 @@
 import numpy as np
-from random import random
+from random import random, choice
 from statsmodels.graphics.tsaplots import plot_acf
 import matplotlib.pyplot as plt
-from scipy.stats import invgamma
+from scipy.stats import invgamma, norm
 from PIL import Image, ImageOps
 from tqdm import tqdm
+
 np.seterr(divide='ignore', invalid='ignore')
 
 
+def show(array):
+    """
 
-    
-def show(img):
+    :type array: 2D np.ndarray with int values between 0 and 255
+    :return: grayscale image corresponding to the argument array
+    """
     plt.figure()
-    plt.imshow(img.astype(int), cmap='gray', vmin=0, vmax=255)
+    plt.imshow(array.astype(int), cmap='gray', vmin=0, vmax=255)
 
 
-
+def inv_cdf_discret(probability_vector):
+    """
+    :param probability_vector: vector representing the PDF of a discrete distribution
+    :return: a simulation of a random variable follow probability_vector distribution
+    """
+    u = random()
+    i = 0
+    while i < len(probability_vector) and probability_vector[i] < u:
+        i += 1
+    return i + 1
 
 
 class GibbsSampler:
 
-
     def __init__(self, n=5, beta=2, K=10, relation=lambda x, y: x == y + 1 or x == y - 1):
+        """
+        :param n: number of components of the Potts model
+        :param beta: beta parameter of the Potts model
+        :param K: number of values that can be taken by the components of the Potts model
+        :param relation: function used to determine the neighbors of a given pixel
+        """
         self.n = n
         self.beta = beta
-        self.K = K
+        self.k_potts = K
         self.relation = relation
-        self.X0 = np.random.randint(low=1, high=self.K + 1, size=self.n)
-
-    def get_value(self, probability_vector):
-        U = random()
-        for k in range(0, self.K):
-            if U >= probability_vector[k] and U < probability_vector[k + 1]:
-                return (k)
+        self.potts_values = np.random.randint(low=1, high=self.k_potts + 1, size=self.n)
 
     def get_conditional(self, index_cond, current_X):
-        somme = [0] * (self.K + 1)
-        Z = 0
-        for k in range(1, self.K + 1):  # on calcule p(xi=k | x_-i)
-
-            # Calcul de la somme
+        """
+        :param index_cond: index of the component that we want to update
+        :param current_X: current value of the Potts model
+        :return: the updated value of that component
+        """
+        somme = [0] * (self.k_potts + 1)
+        probability_vector = np.array([0] * (self.k_potts + 1))
+        for k in range(1, self.k_potts + 1):
+            # Computing p(xi=k | x_-i) for every k
             for j in range(self.n):
                 if j != index_cond and self.relation(j, index_cond):
                     somme[k] += (k == current_X[j])
+            probability_vector[k] = np.exp(self.beta * somme[k])
+        probability_vector = probability_vector / np.sum(probability_vector)
+        return inv_cdf_discret(np.cumsum(probability_vector))
 
-        Z = sum([np.exp(self.beta * somme[k]) for k in range(1, self.K + 1)])
-        probability_vector = [0] * (self.K + 1)
+    def simulate_all(self, nb_iter=500):
+        """
+        Iterates the Gibbs sampler
+        :return: the evolution of the Potts model
+        """
+        potts_evol = np.zeros((self.n, nb_iter))
+        potts_evol[:, 0] = self.potts_values
 
-        for k in range(1, self.K + 1):
-            probability_vector[k] = 1 / Z * np.exp(self.beta * somme[k]) + probability_vector[k - 1]
-        probability_vector.append(1)
-        return (self.get_value(probability_vector))
-
-
-    def simulate_all(self, nb_sample=500):
-
-        X = np.zeros((self.n, nb_sample))
-        X[:, 0] = self.X0
-
-        for i in range(1, nb_sample):
-            X[:, i] = X[:, i - 1]
+        for i in range(1, nb_iter):
+            potts_evol[:, i] = potts_evol[:, i - 1]
             for k in range(self.n):
-                X[k, i] = self.get_conditional(k, X[:, i])
+                potts_evol[k, i] = self.get_conditional(k, potts_evol[:, i])
 
-        return (X)
+        return potts_evol
 
     def simulate(self, nb_sample=500):
-        return (self.simulate_all(nb_sample)[:, -1])
+        return self.simulate_all(nb_sample)[:, -1]
 
     def plot(self, nb_sample=500, composante=0, start=0):
         plt.plot(self.simulate_all(nb_sample)[composante, start:])
         plt.xlabel('Itération')
         plt.ylabel('x{}'.format(composante))
         plt.legend('Graphe de la trace de x{}'.format(composante))
+        plt.show()
 
     def acf_plot(self, nb_sample=500, composante=0, start=0):
         plot_acf(self.simulate_all(nb_sample)[composante, start:])
 
 
+class ImageCompression:
 
-    
-class ImageCompression():
-    
-    def __init__(self, y=np.random.randint(0,255,size=(256,256)), K=16,  beta=1):
-       
-        self.y = y
-        self.u, self.v = self.y.shape
-        self.K = K
-        self.x = np.round((self.y/255)*self.K, 0).astype(int)
-        self.beta = beta
-        self.m_k = np.arange(0, 255, 255/self.K)
-        self.s_k = [1] * self.K
-        self.alpha_k = np.array([1] * self.K)
-        self.beta_k = np.array([10] * self.K)
-        self.mu = np.random.normal(self.m_k, self.s_k, self.K)
-        self.sigma = np.random.gamma(self.alpha_k, 1/self.beta_k, self.K)
-        
-    @staticmethod    
-    def find_neighbors(i,j,x,y):
-        if i==0:
-            if j==0:
-                return [(1,0),(0,1)]
-            elif j==y-1:
-                return [(1,y-1),(0,y-2)]
-            else:
-                return [(0,j-1),(0,j+1),(1,j)]
-        elif i==x-1:
-            if j==0:
-                return [(i-1,j),(i,j+1)]
-            elif j==y-1:
-                return [(i-1,j),(i,j-1)]
-            else:
-                return [(i,j-1),(i,j+1),(i-1,j)]
+    def __init__(self, path=None, image_size=128, K_potts=10, beta_potts=1, mu_mean=1, mu_std=1, alpha=1, beta=10):
+        """
+        :param path: Path of the image we want to compress. If no path is selected, a random gray scale image is
+                        generated
+        :param image_size: the passed image will be resized to this size
+        :param K_potts: number of values possible for each component of the Potts model
+        :param beta_potts: The Beta parameter of the Potts model
+        :param mu_mean: parameter to compute the initial means of the mu vector
+        :param mu_std: parameter to compute the initial std of the mu vector
+        :param alpha: initial alpha parameter for the InvGamma law
+        :param beta: initial beta parameter for the InvGamma law
+        :var self.mu : initial value of the mu vector
+        :var self.sigma: initial value of the sigma vector
+        :var self.potts_values: initial value of each pixel in the Potts model
+        """
+        if path is None:
+            self.image = np.random.randint(0, 256, size=(image_size, image_size))
         else:
-            if j==0:
-                return [(i+1,j),(i,j+1), (i-1,j)]
-            elif j==y-1:
-                return [(i-1,j),(i,j-1), (i+1,j)]
+            image = Image.open(path)
+            image.thumbnail((image_size, image_size), Image.ANTIALIAS)
+            gray_image = ImageOps.grayscale(image)
+            self.image = np.array(gray_image)
+        self.rows, self.columns = self.image.shape
+        self.k_potts = K_potts
+        self.beta_potts = beta_potts
+        self.mu_mean = np.arange(0, 255, 255 * mu_mean / self.k_potts)
+        self.mu_std = [mu_std] * self.k_potts
+        self.alpha = np.array([alpha] * self.k_potts)
+        self.beta = np.array([beta] * self.k_potts)
+        self.mu = np.random.normal(self.mu_mean, self.mu_std, self.k_potts)
+        self.sigma = invgamma.rvs(self.alpha, scale=self.beta, size=self.k_potts)
+        self.potts_values = np.zeros((self.rows, self.columns))
+
+    @staticmethod
+    def find_neighbors(i, j, rows, columns):
+        """
+        :param i: abscissa of the pixel we're interested in
+        :param j: ordinate of the pixel we're interested in
+        :param rows: number of rows in the grid where we're searching for neighbors
+        :param columns: number of columns in the grid where we're searching for neighbors
+        :return: list containing the coordinates of the adjacent neighbors of the pixel at (i, j)
+        """
+        if i == 0:
+            if j == 0:
+                return [(1, 0), (0, 1)]
+            elif j == columns - 1:
+                return [(1, columns - 1), (0, columns - 2)]
             else:
-                return [(i,j-1),(i,j+1),(i-1,j), (i+1,j)]
+                return [(0, j - 1), (0, j + 1), (1, j)]
+        elif i == rows - 1:
+            if j == 0:
+                return [(i - 1, j), (i, j + 1)]
+            elif j == columns - 1:
+                return [(i - 1, j), (i, j - 1)]
+            else:
+                return [(i, j - 1), (i, j + 1), (i - 1, j)]
+        else:
+            if j == 0:
+                return [(i + 1, j), (i, j + 1), (i - 1, j)]
+            elif j == columns - 1:
+                return [(i - 1, j), (i, j - 1), (i + 1, j)]
+            else:
+                return [(i, j - 1), (i, j + 1), (i - 1, j), (i + 1, j)]
 
     @staticmethod
-    def f_normal(y, mu, sigma_2):
-        return 1 / sigma_2 ** 0.5 * np.exp(-(y-mu)**2/(2*sigma_2))  
+    def f_normal(y, mean, sigma_2):
+        """
+        :return: value of the normal pdf at y
+        """
+        return 1 / sigma_2 ** 0.5 * np.exp(-(y - mean) ** 2 / (2 * sigma_2))
 
-    @staticmethod
-    def choice(distrib):
-        distrib = distrib.cumsum()
-        t = np.random.rand()
-        i = 0
-        while i < len(distrib) and distrib[i] < t:
-            i += 1
-        return i + 1
-    
-    @staticmethod
-    def convert(path, resize=128):
-        img = Image.open(path)
-        img.thumbnail((resize, resize), Image.ANTIALIAS)  
-        gray_image = ImageOps.grayscale(img)
-        return(np.array(gray_image))
-    
-    
-    
-    def gibbs_sampling(self, nb_iter=10): 
+    def gibbs_sampling(self, nb_sample=500):
+        """
+        :param nb_sample: number of iterations of the Gibbs sampling algorithm
+        :return: potts_evol: matrxi giving the evolution of the values of each pixel in the Potts model
+                 mu_evol: evolution of the value of the mu vector
+                 sigma_evol: evolution of the value of the sigma vector
+        """
+        potts_evol = np.zeros((self.rows, self.columns, nb_sample)).astype(int)
+        mu_evol = np.zeros((self.k_potts, nb_sample))
+        sigma_evol = np.zeros((self.k_potts, nb_sample))
 
-    
-        for _ in tqdm(range(nb_iter)):
-            
-            
-            # Partie sur x
-            for i in range(self.u):
-                for j in range(self.v):
-                    self.x[i,j] = -1
-                    l_neighbors = ImageCompression.find_neighbors(i,j,self.u,self.v)
-                    distrib = np.array([0]*self.K)
-                    for neigh in l_neighbors:
-                        distrib[self.x[neigh]-1] += 1
-                    #print(distrib)
-                    distrib = np.exp(self.beta * (distrib-distrib[0])) # On fait -distrib[0] afin de ne pas avoir une exponentielle trop grande
-                    for k in range(self.K):
-                        distrib[k] *= ImageCompression.f_normal(self.y[i,j], self.mu[k], self.sigma[k])
-                    #print(distrib)
-                    #print('__________________________')
-                    distrib = distrib / np.sum(distrib)
-                    try:
-                        self.x[i,j] = ImageCompression.choice(distrib)
-                    except ValueError:
-                        print(i,j,distrib)
-            
-            
-            # Partie sur mu
-            for k in range(self.K):
-                n_k = 0
-                buf_k = 0
-                for i in range(self.u):
-                    for j in range(self.v):
-                        if self.x[i, j] == k:
-                            n_k += 1
-                            buf_k += self.y[i, j] / self.sigma[k-1]
-                var_mu = (self.sigma[k-1]**0.5 * self.s_k[k-1])**2/(self.sigma[k-1] + self.s_k[k-1]**2 *n_k)
-                f_k = self.m_k[k-1]/self.s_k[k-1]**2 + buf_k
-                self.mu[k-1] = np.random.normal(var_mu * f_k, np.sqrt(var_mu)) 
+        potts_evol[..., 0] = self.potts_values
+        mu_evol[:, 0] = self.mu
+        sigma_evol[:, 0] = self.sigma
 
-            
-            # Partie sur sigma
-            for k in range(self.K):
-                n_k = 0
-                buf_k = 0
-                for i in range(self.u):
-                    for j in range(self.v):
-                        if self.x[i, j] == k:
-                            n_k += 1
-                            buf_k += (self.y[i, j] - self.mu[k-1])**2 / 2
-                self.sigma[k-1] = np.random.gamma(n_k/2 + self.alpha_k[k-1], 1/(self.beta_k[k-1] + buf_k)) 
+        for time in tqdm(range(1, nb_sample)):
 
-        return(self.x, self.mu, self.sigma)
-        
-    
-    def compress(self, nb_iter=10):
-        mat = np.zeros((self.u,self.v))
-        X, _, _ = self.gibbs_sampling()
-        for i in range(self.u):
-            for j in range(self.v):
-                mat[i,j] = self.mu[X[i,j]-1]
-        return mat
-    
+            potts_evol[..., time] = potts_evol[..., time - 1]
+            mu_evol[:, time] = mu_evol[:, time - 1]
+            sigma_evol[:, time] = sigma_evol[:, time - 1]
+
+            # we start by updating the values of the Potts model
+            for row in range(self.rows):
+                for col in range(self.columns):
+                    somme = [0] * self.k_potts
+                    probability_vector = [0] * self.k_potts
+                    for k in range(self.k_potts):
+                        list_neighbors = self.find_neighbors(row, col, self.rows, self.columns)
+                        for neigh in list_neighbors:
+                            somme[k] += (potts_evol[..., time][neigh] == k + 1)
+
+                        probability_vector[k] = np.exp(self.beta_potts * somme[k]) * \
+                                                self.f_normal(self.image[row, col], mu_evol[k, time],
+                                                              abs(sigma_evol[k, time]))
+                    probability_vector = [probability / sum(probability_vector) for probability in probability_vector]
+                    cdf_vector = np.cumsum(probability_vector)
+                    potts_evol[row, col, time] = inv_cdf_discret(cdf_vector)
+
+            # we now update the sigma vector given the updated Potts model
+            for k in range(self.k_potts):
+                # we first retrieve the indexes of the updated Potts model pixels that are equal to k+1
+                rows, columns = np.where(potts_evol[..., time] == k + 1)
+                n_k = len(rows)
+                ind_k = [[rows[i], columns[i]] for i in range(len(rows))]
+                # we then simulate the next sigma[k] thanks to its posterior distribution (given by Bayesian theory)
+                alpha_k = self.alpha[k] + n_k / 2
+                beta_k = self.beta[k] + 1 / 2 * sum([(self.image[index[0], index[1]] - mu_evol[k, time]) ** 2
+                                                     for index in ind_k])
+                sigma_evol[k, time] = invgamma.rvs(alpha_k, scale=beta_k)
+
+            # We finally update the mu vector given the updated Potts model and sigma vector
+            for k in range(self.k_potts):
+                # we first retrieve the indexes of the updated Potts model pixels that are equal to k+1
+                rows, columns = np.where(potts_evol[..., time] == k + 1)
+                n_k = len(rows)
+                ind_k = [[rows[i], columns[i]] for i in range(len(rows))]
+                # we then simulate the next mu[k] thanks to its posterior distribution (given by Bayesian theory)
+                var_mu = (sigma_evol[k, time] ** 0.5 * self.mu_std[k]) ** 2 / (
+                        sigma_evol[k, time] + self.mu_std[k] ** 2 * n_k)
+                f_k = self.mu_mean[k] / self.mu_std[k] ** 2 + sum(
+                    [self.image[index[0], index[1]] / sigma_evol[k, time] for index in ind_k])
+                mu_evol[k, time] = np.random.normal(var_mu * f_k, np.sqrt(var_mu))
+
+        return potts_evol, mu_evol, sigma_evol
+
+    def compress(self, nb_sample=100):
+        """
+        :return: this methods replaces each pixel in the image with the final mu[k], where k is the value of that pixel
+                    in the Potts model
+        """
+        potts_evol, mu_evol, sigma_evol = self.gibbs_sampling(nb_sample)
+        potts_model = potts_evol[..., -1]
+        mu = mu_evol[:, -1]
+        compressed_img = np.zeros((self.rows, self.columns))
+        for i in range(self.rows):
+            for j in range(self.columns):
+                compressed_img[i, j] = mu[potts_model[i, j] - 1]
+        return compressed_img
+
+    def compress2(self, nb_sample=100):
+        """
+        :return: this method replaces each pixel in the image with final mu[k] +/- the final sigma[k], where k is the
+                    value of that pixel in the Potts model
+        """
+        potts_evol, mu_evol, sigma_evol = self.gibbs_sampling(nb_sample)
+        potts_model = potts_evol[..., -1]
+        mu = mu_evol[:, -1]
+        sigma = sigma_evol[:, -1]
+        compressed_img = np.zeros((self.rows, self.columns))
+        for i in range(self.rows):
+            for j in range(self.columns):
+                compressed_img[i, j] = mu[potts_model[i, j] - 1] + \
+                                       choice([1, -1]) * np.sqrt(sigma[potts_model[i, j] - 1])
+        return compressed_img
+
+
+if __name__ == "__main__":
+    img = ImageCompression('ENSAE_image.jpg', K_potts=10)
+    compressed_meth1 = img.compress(nb_sample=100)
+    show(compressed_meth1)
+    plt.show()
