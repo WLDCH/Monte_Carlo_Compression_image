@@ -4,10 +4,11 @@
 
 ## Introduction
 
-Le modèle de Potts est une généralisation du modèle d’Ising permettant un nombre de modalités supérieur à deux : On considère un vecteur aléatoire $x=(x_1,...,x_n)$ à valeurs dans $ \{1, . . . , K\}^n $ K > 2, dont la probabilité est:
+Le modèle de Potts est une généralisation du modèle d’Ising permettant un nombre de modalités supérieur à deux : On considère un vecteur aléatoire $x=(x_1,...,x_n)$ à valeurs dans $\{1, . . . , K\}^n \, K > 2$, dont la probabilité est:
 
 
-$$ π(x) = \frac{1}{\text{Z}(β)} \text{exp}\left\{β \sum_{i∼j}^{} \mathbb{1}[x_i = x_j])\right\} $$
+$π(x) = \frac{1}{\text{Z}(β)} \text{exp}\left\lbrace β \sum_{i∼j}^{} \mathbb{1}[x_i = x_j])\right\\rbrace$
+
 
 où
 * $β$ > 0 
